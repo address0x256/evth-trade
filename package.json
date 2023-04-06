@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "@chainlink/contracts": "^0.6.1",
+    "@nomiclabs/hardhat-etherscan": "^3.1.7",
+    "@nomiclabs/hardhat-waffle": "^2.0.5",
+    "dotenv": "^16.0.3"
+  },
+  "devDependencies": {
+    "hardhat": "^2.13.0"
+  }
+}
