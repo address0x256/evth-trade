@@ -1,0 +1,10 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "PositionManager",
+  "sourceName": "contracts/core/PositionManager.sol",
+  "abi": [],
+  "bytecode": "0x6080604052348015600f57600080fd5b50603f80601d6000396000f3fe6080604052600080fdfea26469706673582212205e5b89a76039d2169d5f2dbd44e78f2aef0c6bb8cdb3dcfaaa3c09cdd2ae0ab764736f6c63430008110033",
+  "deployedBytecode": "0x6080604052600080fdfea26469706673582212205e5b89a76039d2169d5f2dbd44e78f2aef0c6bb8cdb3dcfaaa3c09cdd2ae0ab764736f6c63430008110033",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}
