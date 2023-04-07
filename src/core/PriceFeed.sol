@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
 
-import "../node_modules/@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "../../node_modules/@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import "../../node_modules/@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "./interface/IPriceFeed.sol";
 
 contract PriceFeed is IPriceFeed {
+    using SafeMath for uint256;
+
     AggregatorV3Interface internal aggregator;
 
     int256 public answer;
     uint80 public roundId;
     uint256 public lastUpdateTimestamp;
     uint256 public updateInterval = 1 hours;
+    uint256 public PRICE_PRECISION = 30;
     mapping(uint80 => int256) public answers;
     mapping(address => bool) public isAdmin;
 
@@ -54,11 +58,11 @@ contract PriceFeed is IPriceFeed {
         }
     }
 
-    function getRoundId() external view returns (uint80) {
-        return roundId;
+    function getRoundId() external view returns (uint256) {
+        return uint256(roundId);
     }
 
-    function getLatestAnswer() external view returns (int256) {
-        return answer;
+    function getLatestAnswer() external view override returns (uint256) {
+        return uint256(answer).mul(10 ** PRICE_PRECISION);
     }
 }
