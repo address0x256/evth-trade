@@ -23,7 +23,7 @@ contract Vault is ReentrancyGuard, IVault {
     }
 
     // max leverage
-    uint256 MAX_LEVERAGE = 20;
+    uint256 maxLeverage = 20;
 
     address gov;
     // manager
@@ -167,24 +167,30 @@ contract Vault is ReentrancyGuard, IVault {
 
         // step 2: collateral
         uint256 totalFees = 0;
-        uint256 positionFee = feeManager.getPositionFee(_sizeDelta);
-        totalFees.add(positionFee);
+        {
+            uint256 positionFee = feeManager.getPositionFee(_sizeDelta);
+            totalFees.add(positionFee);
+        }
 
         // nothing else included into totalFees for simplicity
-        uint256 feeTokens = tokenUtils.usdToToken(_collateralToken, totalFees);
-        feeManager.updateFeeReserves(_collateralToken, feeTokens);
+        {
+            uint256 feeTokens = tokenUtils.usdToToken(_collateralToken, totalFees);
+            feeManager.updateFeeReserves(_collateralToken, feeTokens);
+        }
 
         // add collateral if necessary
-        uint256 collateralDelta = _transferIn(_collateralToken);
-        uint256 collateralDeltaUsd = tokenUtils.tokenToUsd(_collateralToken, collateralDelta);
-        position.collateral = position.collateral.add(collateralDeltaUsd);
+        {
+            uint256 collateralDelta = _transferIn(_collateralToken);
+            uint256 collateralDeltaUsd = tokenUtils.tokenToUsd(_collateralToken, collateralDelta);
+            position.collateral = position.collateral.add(collateralDeltaUsd);
+        }
 
         // update collateral
         position.collateral = position.collateral.sub(totalFees);
 
         // step 3: size
         position.size = position.size.add(_sizeDelta);
-        require(position.collateral.mul(MAX_LEVERAGE) >= position.size, "_validateLeverage: liquidation risk");
+        require(position.collateral.mul(maxLeverage) >= position.size, "_validateLeverage: liquidation risk");
 
         // step 4: reserve
         uint256 reserveDelta = tokenUtils.usdToToken(_collateralToken, _sizeDelta);
@@ -202,7 +208,7 @@ contract Vault is ReentrancyGuard, IVault {
         uint256 _collateralDelta,
         uint256 _sizeDelta,
         bool _isLong
-    ) private returns (uint256) {
+    ) private returns (uint256 _outUsd, uint256 _totalFees) {
         Position storage position;
         {
             bytes32 key = getPositionKey(_account, _collateralToken, _indexToken, _isLong);
@@ -219,35 +225,34 @@ contract Vault is ReentrancyGuard, IVault {
         }
 
         // compute net collateral delta
-        uint256 outUsd = 0;
         {
             uint256 netCollateralDelta = 0;
-            uint256 totalFees = 0;
             {
                 uint256 positionFee = feeManager.getPositionFee(_sizeDelta);
-                totalFees.add(positionFee);
+                _totalFees.add(positionFee);
             }
             if (_sizeDelta == position.size) {
                 // clear the position
                 netCollateralDelta = position.collateral;
-                outUsd = position.collateral;
-                require(outUsd >= totalFees, "_reduceCollateral: colllateral cannot cover fees");
+                _outUsd = position.collateral;
+                require(_outUsd >= _totalFees, "_reduceCollateral: colllateral cannot cover fees");
                 if (!hasProfit) {
-                    require(outUsd >= (realizedPnL.add(totalFees)), "_reduceCollateral: collateral cannot cover loss");
+                    require(_outUsd >= (realizedPnL.add(_totalFees)), "_reduceCollateral: collateral cannot cover loss");
                 }
-                outUsd = hasProfit ? outUsd.add(realizedPnL).sub(totalFees) : outUsd.sub(realizedPnL).sub(totalFees);
+                _outUsd =
+                    hasProfit ? _outUsd.add(realizedPnL).sub(_totalFees) : _outUsd.sub(realizedPnL).sub(_totalFees);
             } else {
                 // partially decrease position
                 netCollateralDelta = _collateralDelta;
                 if (hasProfit == true) {
-                    if (realizedPnL >= totalFees) {
-                        outUsd = realizedPnL.sub(totalFees);
+                    if (realizedPnL >= _totalFees) {
+                        _outUsd = realizedPnL.sub(_totalFees);
                     } else {
-                        outUsd = realizedPnL;
-                        netCollateralDelta = netCollateralDelta.add(totalFees);
+                        _outUsd = realizedPnL;
+                        netCollateralDelta = netCollateralDelta.add(_totalFees);
                     }
                 } else {
-                    netCollateralDelta = netCollateralDelta.add(realizedPnL).add(totalFees);
+                    netCollateralDelta = netCollateralDelta.add(realizedPnL).add(_totalFees);
                 }
             }
 
@@ -263,13 +268,13 @@ contract Vault is ReentrancyGuard, IVault {
         poolAmounts[_collateralToken] =
             hasProfit ? poolAmounts[_collateralToken].sub(pnlAmount) : poolAmounts[_collateralToken].add(pnlAmount);
 
-        return outUsd;
+        return (_outUsd, _totalFees);
     }
 
     /**
      * descrease position or collateral
      */
-    function decreasePosition(
+    function _decreasePosition(
         address _account,
         address _collateralToken,
         address _indexToken,
@@ -277,10 +282,7 @@ contract Vault is ReentrancyGuard, IVault {
         uint256 _sizeDelta,
         bool _isLong,
         address _receiver
-    ) external nonReentrant {
-        require(_account != address(0), "decreasePosition: account == 0");
-        tokenUtils.validPositionToken(_collateralToken, _indexToken, _isLong);
-
+    ) internal nonReentrant {
         bytes32 key = getPositionKey(_account, _collateralToken, _indexToken, _isLong);
         Position storage position = positions[key];
         uint256 currentSize = position.size;
@@ -297,14 +299,20 @@ contract Vault is ReentrancyGuard, IVault {
         }
 
         // step 2: update collateral
-        uint256 outUsd =
+        (uint256 outUsd, uint256 totalFees) =
             _reduceCollateral(_account, _collateralToken, _indexToken, _collateralDelta, _sizeDelta, _isLong);
 
-        // step 3: update size
-        position.size = currentSize.sub(_sizeDelta);
-        require(position.collateral.mul(MAX_LEVERAGE) >= position.size, "_validateLeverage: liquidation risk");
+        // step 3: update global fee reserve
+        {
+            uint256 feeTokens = tokenUtils.usdToToken(_collateralToken, totalFees);
+            feeManager.updateFeeReserves(_collateralToken, feeTokens);
+        }
 
-        // step 4: transfer out
+        // step 4: update size
+        position.size = currentSize.sub(_sizeDelta);
+        require(position.collateral.mul(maxLeverage) >= position.size, "_validateLeverage: liquidation risk");
+
+        // step 5: transfer out
         uint256 outTokenAmount = 0;
         if (outUsd > 0) {
             uint256 profitAmount = tokenUtils.usdToToken(_collateralToken, outUsd);
@@ -323,13 +331,106 @@ contract Vault is ReentrancyGuard, IVault {
         }
     }
 
+    function decreasePosition(
+        address _account,
+        address _collateralToken,
+        address _indexToken,
+        uint256 _collateralDelta,
+        uint256 _sizeDelta,
+        bool _isLong,
+        address _receiver
+    ) external nonReentrant {
+        require(_account != address(0), "decreasePosition: account == 0");
+        tokenUtils.validPositionToken(_collateralToken, _indexToken, _isLong);
+        _decreasePosition(_account, _collateralToken, _indexToken, _collateralDelta, _sizeDelta, _isLong, _receiver);
+    }
+
+    /**
+     * 0: passive liquidation, collateral will never be returned
+     * 1: passive liquidation, collateral will be returned
+     * 2: active liquidation on user's will
+     */
+    function _getLiquidationLevel(address _account, address _collateralToken, address _indexToken, bool _isLong)
+        private
+        view
+        returns (uint256 _level, uint256 _feesToPay)
+    {
+        Position storage position;
+        {
+            bytes32 key = getPositionKey(_account, _collateralToken, _indexToken, _isLong);
+            position = positions[key];
+        }
+
+        uint256 remainedCollateral = 0;
+        // fees
+        {
+            uint256 positionFee = feeManager.getPositionFee(position.size);
+            _feesToPay.add(positionFee);
+        }
+        if (position.collateral < _feesToPay) {
+            _level = 0;
+            return (_level, _feesToPay);
+        }
+
+        // loss
+        remainedCollateral = remainedCollateral.add(position.collateral.sub(_feesToPay));
+        (bool hasProfit, uint256 delta) = getDelta(_indexToken, position.size, position.averagePrice, _isLong);
+        if (!hasProfit && (position.collateral < _feesToPay.add(delta))) {
+            _level = 0;
+            return (_level, _feesToPay);
+        }
+
+        // leverage
+        remainedCollateral = hasProfit ? remainedCollateral.add(delta) : remainedCollateral.sub(delta);
+        if (remainedCollateral.mul(maxLeverage) < position.size) {
+            _level = 1;
+            return (_level, _feesToPay);
+        }
+        _level = 2;
+        return (_level, _feesToPay);
+    }
+
     function liquidatePosition(
         address _account,
         address _collateralToken,
         address _indexToken,
         bool _isLong,
-        address _feeReceiver
-    ) external nonReentrant {}
+        address _receiver
+    ) external nonReentrant {
+        require(_account != address(0), "decreasePosition: account == 0");
+        tokenUtils.validPositionToken(_collateralToken, _indexToken, _isLong);
+
+        bytes32 key = getPositionKey(_account, _collateralToken, _indexToken, _isLong);
+        Position storage position = positions[key];
+        require(position.size > 0, "liquidatePosition: size == 0");
+
+        // get level
+        (uint256 level, uint256 totalFees) = _getLiquidationLevel(_account, _collateralToken, _indexToken, _isLong);
+        if (level >= 2) {
+            return;
+        }
+        if (level == 1) {
+            _decreasePosition(_account, _collateralToken, _indexToken, 0, position.size, _isLong, _receiver);
+            return;
+        }
+
+        // update global fee reserve
+        uint256 feeTokens = tokenUtils.usdToToken(_collateralToken, totalFees);
+        feeManager.updateFeeReserves(_collateralToken, feeTokens);
+
+        // update global reserve amount
+        _decreaseReservedAmount(_collateralToken, position.reserveAmount);
+
+        // update global pool
+        uint256 liquidationDelta = position.collateral.sub(totalFees);
+        if (liquidationDelta > 0) {
+            uint256 liquidationAmount = tokenUtils.usdToToken(_collateralToken, liquidationDelta);
+            poolAmounts[_collateralToken] = poolAmounts[_collateralToken].add(liquidationAmount);
+        }
+
+        // update positions
+        delete positions[key];
+    }
 
     function swap(address _tokenIn, address _tokenOut, address _receiver) external nonReentrant {}
 }
