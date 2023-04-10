@@ -9,6 +9,8 @@ import "./interface/ITokenUtils.sol";
 import "./interface/IVault.sol";
 import "./interface/IFeeManager.sol";
 
+import "hardhat/console.sol";
+
 contract Vault is ReentrancyGuard, IVault {
     using SafeMath for uint256;
 
@@ -34,7 +36,7 @@ contract Vault is ReentrancyGuard, IVault {
     // fee related
     IFeeManager feeManager;
 
-    // tokenBalances is used only to determine _transferIn values
+    // tokenBalances is used only to determine transferIn values
     mapping(address => uint256) public tokenBalances;
 
     // amount of tokens available in pool, fees not included
@@ -151,54 +153,85 @@ contract Vault is ReentrancyGuard, IVault {
     ) external nonReentrant {
         require(_account != address(0), "increasePosition: account == 0");
         tokenUtils.validPositionToken(_collateralToken, _indexToken, _isLong);
+        console.log("#### validate passed!");
 
         bytes32 key = getPositionKey(_account, _collateralToken, _indexToken, _isLong);
         Position storage position = positions[key];
 
         // step 1: average price
+        uint256 _sizeDeltaAdjusted = tokenUtils.getAdjustedSize(_indexToken, _sizeDelta);
+        console.log("#### adjusted size: %s", _sizeDeltaAdjusted);
+
         uint256 price = tokenUtils.getPrice(_indexToken);
+        console.log("#### old average price %s", position.averagePrice);
         if (position.size == 0) {
             position.averagePrice = price;
         }
-        if (position.size > 0 && _sizeDelta > 0) {
-            position.averagePrice =
-                getNextAveragePrice(_indexToken, position.size, position.averagePrice, _isLong, price, _sizeDelta);
+        if (position.size > 0 && _sizeDeltaAdjusted > 0) {
+            position.averagePrice = getNextAveragePrice(
+                _indexToken, position.size, position.averagePrice, _isLong, price, _sizeDeltaAdjusted
+            );
         }
+        console.log("#### price of token %s is %s", _indexToken, price);
+        console.log("#### next average price %s", position.averagePrice);
 
         // step 2: collateral
-        uint256 totalFees = 0;
+        uint256 totalFeeAdjusted = 0;
         {
-            uint256 positionFee = feeManager.getPositionFee(_sizeDelta);
-            totalFees.add(positionFee);
-        }
-
-        // nothing else included into totalFees for simplicity
-        {
-            uint256 feeTokens = tokenUtils.usdToToken(_collateralToken, totalFees);
+            uint256 totalFees = 0;
+            {
+                uint256 positionFee = feeManager.getPositionFee(_sizeDeltaAdjusted);
+                totalFees = totalFees.add(positionFee);
+                console.log("#### size delta %s, total fees: %s", _sizeDeltaAdjusted, totalFees);
+            }
+            totalFeeAdjusted = tokenUtils.getAdjustedUsd(_collateralToken, _indexToken, totalFees);
+            console.log("#### total fee adjusted: %s", totalFeeAdjusted);
+            uint256 feeTokens = tokenUtils.usdToToken(_collateralToken, totalFeeAdjusted);
             feeManager.updateFeeReserves(_collateralToken, feeTokens);
+            console.log("#### fee token amount: %s", feeTokens);
         }
 
         // add collateral if necessary
         {
             uint256 collateralDelta = _transferIn(_collateralToken);
+            // uint256 collateralDeltaAdjusted = tokenUtils.getAdjustedAmount(_collateralToken, collateralDelta);
             uint256 collateralDeltaUsd = tokenUtils.tokenToUsd(_collateralToken, collateralDelta);
             position.collateral = position.collateral.add(collateralDeltaUsd);
+            console.log(
+                "#### amount of collateral delta: %s, usd of collateral: %s", collateralDelta, collateralDeltaUsd
+            );
+            console.log("#### collateral before fees: %s", position.collateral);
         }
 
         // update collateral
-        position.collateral = position.collateral.sub(totalFees);
+        position.collateral = position.collateral.sub(totalFeeAdjusted);
+        console.log("#### collateral after fees: %s", position.collateral);
 
         // step 3: size
-        position.size = position.size.add(_sizeDelta);
-        require(position.collateral.mul(maxLeverage) >= position.size, "_validateLeverage: liquidation risk");
+        position.size = position.size.add(_sizeDeltaAdjusted);
+        {
+            uint256 collateralDecimal = tokenUtils.getDecimal(_collateralToken);
+            uint256 indexDecimal = tokenUtils.getDecimal(_indexToken);
+            uint256 maxPositionSize = position.collateral.mul(maxLeverage).mul(10 ** collateralDecimal);
+            require(maxPositionSize >= position.size.mul(10 ** indexDecimal), "_validateLeverage: liquidation risk");
+            console.log(
+                "#### max position size: %s, current position size: %s",
+                maxPositionSize,
+                position.size.mul(10 ** indexDecimal)
+            );
+        }
 
         // step 4: reserve
-        uint256 reserveDelta = tokenUtils.usdToToken(_collateralToken, _sizeDelta);
-        position.reserveAmount = position.reserveAmount.add(reserveDelta);
-        position.lastIncreasedTime = block.timestamp;
+        {
+            uint256 reserveAdjusted = tokenUtils.getAdjustedUsd(_collateralToken, _indexToken, _sizeDeltaAdjusted);
+            uint256 reserveDelta = tokenUtils.usdToToken(_collateralToken, reserveAdjusted);
+            console.log("#### reserve adjusted: %s, reserve delta: %s", reserveAdjusted, reserveDelta);
+            position.reserveAmount = position.reserveAmount.add(reserveDelta);
+            // update global amount of opening token, either long or short
+            _increaseReservedAmount(_collateralToken, reserveDelta);
+        }
 
-        // update global amount of opening token, either long or short
-        _increaseReservedAmount(_collateralToken, reserveDelta);
+        position.lastIncreasedTime = block.timestamp;
     }
 
     function _reduceCollateral(
@@ -430,6 +463,13 @@ contract Vault is ReentrancyGuard, IVault {
 
         // update positions
         delete positions[key];
+    }
+
+    function deposite(address _token) external nonReentrant {
+        require(tokenUtils.isWhiteListToken(_token), "deposite: not whitelist token");
+
+        uint256 tokenAmount = _transferIn(_token);
+        poolAmounts[_token] = poolAmounts[_token].add(tokenAmount);
     }
 
     function swap(address _tokenIn, address _tokenOut, address _receiver) external nonReentrant {}

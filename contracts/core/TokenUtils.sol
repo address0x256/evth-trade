@@ -25,37 +25,62 @@ contract TokenUtils is ITokenUtils {
     // token stable
     mapping(address => bool) public stableToken;
 
-    // already exists before on-chain
-    constructor(address _tokenManager) {
-        tokenManager = ITokenManager(_tokenManager);
+    function setPriceFeed(address _token, address _feed) external {
+        tokenPriceFeed[_token] = _feed;
     }
 
-    // need to trigger it on-chain
-    function initialization() external {
-        // price feed
-        tokenPriceFeed[tokenManager.getToken("FBTC")] =
-            address(new PriceFeed(0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43));
-        tokenPriceFeed[tokenManager.getToken("FETH")] =
-            address(new PriceFeed(0x694AA1769357215DE4FAC081bf1f309aDC325306));
-        tokenPriceFeed[tokenManager.getToken("FDAI")] =
-            address(new PriceFeed(0x14866185B1962B63C3Ea9E03Bc1da838bab34C19));
-        tokenPriceFeed[tokenManager.getToken("FLINK")] =
-            address(new PriceFeed(0x14866185B1962B63C3Ea9E03Bc1da838bab34C19));
-
-        // decimals
-        tokenDecimal[tokenManager.getToken("FBTC")] = 8;
-        tokenDecimal[tokenManager.getToken("FETH")] = 18;
-        tokenDecimal[tokenManager.getToken("FDAI")] = 18;
-        tokenDecimal[tokenManager.getToken("FLINK")] = 18;
+    function setDecimals(address _token, uint256 _decimal) external {
+        tokenDecimal[_token] = _decimal;
     }
 
-    // price from chainlink
-    function getPrice(address _token) public view returns (uint256) {
-        return IPriceFeed(tokenPriceFeed[_token]).getLatestAnswer();
+    function setStableToken(address _token) public {
+        require(_token != address(0), "setStableToken: address == 0");
+        stableToken[_token] = true;
+    }
+
+    function setWhiteListToken(address _token) public {
+        require(_token != address(0), "setWhiteListToken: address == 0");
+        whitelistToken[_token] = true;
+    }
+
+    function isWhiteListToken(address _token) external view returns (bool) {
+        return whitelistToken[_token];
+    }
+
+    function isStableToken(address _token) external view returns (bool) {
+        return stableToken[_token];
     }
 
     function getDecimal(address _token) public view returns (uint256) {
         return tokenDecimal[_token];
+    }
+
+    // unit price
+    function getPrice(address _token) public view returns (uint256) {
+        uint256 price = IPriceFeed(tokenPriceFeed[_token]).getLatestAnswer();
+        uint256 decimal = getDecimal(_token);
+        return price.div(10 ** decimal);
+    }
+
+    function getAdjustedSize(address _token, uint256 _size) external view returns (uint256) {
+        uint256 precision = IPriceFeed(tokenPriceFeed[_token]).getPricePrecision();
+        uint256 decimal = getDecimal(_token);
+        return _size.mul(10 ** precision).div(10 ** decimal);
+    }
+
+    function getAdjustedAmount(address _token, uint256 _amount) external view returns (uint256) {
+        uint256 decimal = getDecimal(_token);
+        return _amount.mul(10 ** decimal);
+    }
+
+    function getAdjustedUsd(address _collateralToken, address _indexToken, uint256 _usdAmount)
+        external
+        view
+        returns (uint256)
+    {
+        uint256 indexDecimal = getDecimal(_indexToken);
+        uint256 collateralDecimal = getDecimal(_collateralToken);
+        return _usdAmount.mul(10 ** indexDecimal).div(10 ** collateralDecimal);
     }
 
     function tokenToUsd(address _token, uint256 _tokenAmount) public view returns (uint256) {

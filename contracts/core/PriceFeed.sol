@@ -64,5 +64,14 @@ contract PriceFeed is IPriceFeed {
 
     function getLatestAnswer() external view override returns (uint256) {
         return uint256(answer).mul(10 ** PRICE_PRECISION);
+        // return uint256(answer);
+    }
+
+    function getPricePrecision() external view returns (uint256) {
+        return PRICE_PRECISION;
+    }
+
+    function setFaucetPrice(int256 _price) external {
+        answer = _price;
     }
 }

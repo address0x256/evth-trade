@@ -26,4 +26,5 @@ interface IVault {
         address _feeReceiver
     ) external;
     function swap(address _tokenIn, address _tokenOut, address _receiver) external;
+    function deposite(address _token) external;
 }

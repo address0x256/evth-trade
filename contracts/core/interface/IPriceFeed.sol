@@ -6,4 +6,5 @@ interface IPriceFeed {
     function updatePrice() external;
     function getRoundId() external view returns (uint256);
     function getLatestAnswer() external view returns (uint256);
+    function getPricePrecision() external view returns (uint256);
 }
